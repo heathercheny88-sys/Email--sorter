@@ -9,6 +9,10 @@ st.set_page_config(page_title="Email Provider Sorter", layout="centered")
 st.title("📦 Clean Email Provider Sorter")
 st.write("Upload your spreadsheet to isolate providers into clean lists containing **only Names and Emails**.")
 
+# Initialize the website memory (Session State) so data doesn't erase on download clicks
+if "sorted_data" not in st.session_state:
+    st.session_state.sorted_data = None
+
 def extract_domain(email):
     if pd.isna(email) or not isinstance(email, str):
         return None
@@ -40,22 +44,23 @@ def identify_email_host(domain):
 uploaded_file = st.file_uploader("Upload your leads CSV file", type=["csv"])
 
 if uploaded_file is not None:
+    # Read the file once uploaded
     df = pd.read_csv(uploaded_file)
     columns_list = list(df.columns)
     
     st.write("### 🔍 Select Your Spreadsheet Columns")
-    
-    # Let the user explicitly choose the columns so there is no guessing
     email_col = st.selectbox("Which column contains the EMAIL ADDRESSES?", options=columns_list)
     name_col = st.selectbox("Which column contains the NAMES?", options=columns_list)
 
+    # When a new file is uploaded or columns change, clear the previous run from memory
     if st.button("🚀 Run Sorter and Generate Files"):
-        # Make a secure working copy with only our target columns
+        st.session_state.sorted_data = None # Reset memory for new calculations
+        
+        # Build clean dataframe structure
         working_df = pd.DataFrame()
         working_df['Name'] = df[name_col].astype(str)
         working_df['Email'] = df[email_col].astype(str)
             
-        # Scan unique domains
         working_df['Extracted_Domain'] = working_df['Email'].apply(extract_domain)
         unique_domains = working_df['Extracted_Domain'].dropna().unique()
         
@@ -72,10 +77,20 @@ if uploaded_file is not None:
                 
         working_df['Email_Ecosystem'] = working_df['Extracted_Domain'].map(lambda d: domain_category_map.get(d, "Invalid / Dead Domain"))
         
-        st.success("Sorting finished! Click the buttons below to download your clean files:")
-        st.write("---")
+        # Keep ONLY Name and Email for output files
+        working_df = working_df[['Name', 'Email', 'Email_Ecosystem']]
+        
+        # Store sorted results inside persistent app memory
+        st.session_state.sorted_data = working_df
+        st.success("Sorting finished! Download links compiled.")
 
-        # SEPARATE FILE SEGMENTATION & CLEAN DOWNLOAD LINKS
+    # 2. RUN RENDER BLOCK FROM PERSISTENT MEMORY
+    if st.session_state.sorted_data is not None:
+        st.write("---")
+        st.write("### 📥 Download Clean Provider Files (Name & Email Only)")
+        
+        saved_df = st.session_state.sorted_data
+        
         sorting_buckets = {
             "Microsoft 365": "microsoft_leads.csv",
             "Google Workspace": "google_leads.csv",
@@ -86,24 +101,21 @@ if uploaded_file is not None:
             "Invalid / Dead Domain": "invalid_or_dead_emails.csv"
         }
 
+        # Loop through buckets and render persistent buttons
         for bucket_name, filename in sorting_buckets.items():
-            # Filter rows for this specific bucket
-            bucket_df = working_df[working_df['Email_Ecosystem'] == bucket_name].copy()
-            
-            # Keep ONLY the final Name and Email columns
-            bucket_df = bucket_df[['Name', 'Email']]
+            bucket_df = saved_df[saved_df['Email_Ecosystem'] == bucket_name].copy()
+            bucket_df = bucket_df[['Name', 'Email']]  # Strip everything except Name and Email
             
             if not bucket_df.empty:
-                # Convert dataframe to clean CSV bytes
                 csv_buffer = io.BytesIO()
                 bucket_df.to_csv(csv_buffer, index=False, encoding='utf-8')
                 csv_buffer.seek(0)
                 
-                # Render separate download row
+                # These buttons will now remain visible on the screen during user interactions
                 st.download_button(
-                    label=f"📥 Download Only {bucket_name} ({len(bucket_df)} leads)",
+                    label=f"📥 Download {bucket_name} List ({len(bucket_df)} leads)",
                     data=csv_buffer,
                     file_name=filename,
                     mime="text/csv",
-                    key=filename
+                    key=f"btn_{filename}"
                 )
