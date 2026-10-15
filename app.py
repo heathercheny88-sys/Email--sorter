@@ -41,43 +41,20 @@ uploaded_file = st.file_uploader("Upload your leads CSV file", type=["csv"])
 
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
+    columns_list = list(df.columns)
     
-    # 1. DYNAMICALLY LOCATE CRITICAL COLUMNS
-    email_col = None
-    name_col = None
+    st.write("### 🔍 Select Your Spreadsheet Columns")
     
-    for col in df.columns:
-        col_clean = col.lower().strip()
-        if col_clean in ['email', 'emails', 'email address', 'mail', 'contact']:
-            email_col = col
-        elif col_clean in ['name', 'full name', 'lead name', 'contact name', 'first name']:
-            name_col = col
+    # Let the user explicitly choose the columns so there is no guessing
+    email_col = st.selectbox("Which column contains the EMAIL ADDRESSES?", options=columns_list)
+    name_col = st.selectbox("Which column contains the NAMES?", options=columns_list)
 
-    # Fallbacks if columns aren't named explicitly
-    if email_col is None:
-        email_col = df.columns[0]
-    if name_col is None:
-        # If no explicit name column exists, look for any text column that isn't the email
-        non_email_cols = [c for c in df.columns if c != email_col]
-        name_col = non_email_cols[0] if non_email_cols else None
-
-    st.info(f"Targeting Columns ➔ Name: **'{name_col}'** | Email: **'{email_col}'**")
-
-    if st.button("🚀 Run Sorter"):
+    if st.button("🚀 Run Sorter and Generate Files"):
         # Make a secure working copy with only our target columns
-        keep_cols = [name_col, email_col] if name_col else [email_col]
-        working_df = df[keep_cols].copy()
-        
-        # Standardize our column names for the output files
-        if name_col:
-            working_df = working_df.rename(columns={name_col: 'Name', email_col: 'Email'})
-        else:
-            working_df = working_df.rename(columns={email_col: 'Email'})
-            working_df['Name'] = "Unknown"  # Fallback if file has no names
+        working_df = pd.DataFrame()
+        working_df['Name'] = df[name_col].astype(str)
+        working_df['Email'] = df[email_col].astype(str)
             
-        # Reorder columns to guarantee Name is first, Email is second
-        working_df = working_df[['Name', 'Email']]
-
         # Scan unique domains
         working_df['Extracted_Domain'] = working_df['Email'].apply(extract_domain)
         unique_domains = working_df['Extracted_Domain'].dropna().unique()
@@ -95,10 +72,10 @@ if uploaded_file is not None:
                 
         working_df['Email_Ecosystem'] = working_df['Extracted_Domain'].map(lambda d: domain_category_map.get(d, "Invalid / Dead Domain"))
         
-        st.success("Sorting finished! Download your targeted files below:")
+        st.success("Sorting finished! Click the buttons below to download your clean files:")
         st.write("---")
 
-        # 2. SEPARATE FILE SEGMENTATION & CLEAN DOWNLOAD LINKS
+        # SEPARATE FILE SEGMENTATION & CLEAN DOWNLOAD LINKS
         sorting_buckets = {
             "Microsoft 365": "microsoft_leads.csv",
             "Google Workspace": "google_leads.csv",
@@ -124,7 +101,7 @@ if uploaded_file is not None:
                 
                 # Render separate download row
                 st.download_button(
-                    label=f"📥 Download {bucket_name} ({len(bucket_df)} leads)",
+                    label=f"📥 Download Only {bucket_name} ({len(bucket_df)} leads)",
                     data=csv_buffer,
                     file_name=filename,
                     mime="text/csv",
