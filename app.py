@@ -3,15 +3,12 @@ import pandas as pd
 import dns.resolver
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import io
+import zipfile
 
 st.set_page_config(page_title="Email Provider Sorter", layout="centered")
 
 st.title("📦 Clean Email Provider Sorter")
-st.write("Upload your spreadsheet to isolate providers into clean lists containing **only Names and Emails**.")
-
-# Initialize the website memory (Session State) so data doesn't erase on download clicks
-if "sorted_data" not in st.session_state:
-    st.session_state.sorted_data = None
+st.write("Upload your spreadsheet to isolate providers into clean lists containing **only Names and Emails** downloaded in a clean package.")
 
 def extract_domain(email):
     if pd.isna(email) or not isinstance(email, str):
@@ -21,30 +18,29 @@ def extract_domain(email):
 
 def identify_email_host(domain):
     if not domain: 
-        return "Invalid / Dead Domain"
+        return "Invalid_or_Dead_Domains"
     try:
         answers = dns.resolver.resolve(domain, 'MX')
         for rdata in answers:
             host = str(rdata.exchange).lower()
             if "outlook" in host or "protection.outlook" in host: 
-                return "Microsoft 365"
+                return "Microsoft_365"
             elif "google" in host or "aspmx" in host: 
-                return "Google Workspace"
+                return "Google_Workspace"
             elif "mimecast" in host: 
-                return "Mimecast Gateway"
+                return "Mimecast_Gateway"
             elif "proofpoint" in host or "pphosted" in host: 
-                return "Proofpoint Gateway"
+                return "Proofpoint_Gateway"
             elif "comcast" in host or "businessclass" in host: 
-                return "Comcast Business"
-        return "Private / Custom Host"
+                return "Comcast_Business"
+        return "Private_or_Custom_Hosts"
     except:
-        return "Invalid / Dead Domain"
+        return "Invalid_or_Dead_Domains"
 
 # File Uploader
 uploaded_file = st.file_uploader("Upload your leads CSV file", type=["csv"])
 
 if uploaded_file is not None:
-    # Read the file once uploaded
     df = pd.read_csv(uploaded_file)
     columns_list = list(df.columns)
     
@@ -52,10 +48,7 @@ if uploaded_file is not None:
     email_col = st.selectbox("Which column contains the EMAIL ADDRESSES?", options=columns_list)
     name_col = st.selectbox("Which column contains the NAMES?", options=columns_list)
 
-    # When a new file is uploaded or columns change, clear the previous run from memory
-    if st.button("🚀 Run Sorter and Generate Files"):
-        st.session_state.sorted_data = None # Reset memory for new calculations
-        
+    if st.button("🚀 Run Sorter and Generate Zip Package"):
         # Build clean dataframe structure
         working_df = pd.DataFrame()
         working_df['Name'] = df[name_col].astype(str)
@@ -75,47 +68,45 @@ if uploaded_file is not None:
                 domain_category_map[dom] = future.result()
                 progress_bar.progress((i + 1) / len(unique_domains))
                 
-        working_df['Email_Ecosystem'] = working_df['Extracted_Domain'].map(lambda d: domain_category_map.get(d, "Invalid / Dead Domain"))
+        working_df['Email_Ecosystem'] = working_df['Extracted_Domain'].map(lambda d: domain_category_map.get(d, "Invalid_or_Dead_Domains"))
         
-        # Keep ONLY Name and Email for output files
-        working_df = working_df[['Name', 'Email', 'Email_Ecosystem']]
+        # 1. INITIALIZE IN-MEMORY ZIP BUFFER
+        zip_buffer = io.BytesIO()
         
-        # Store sorted results inside persistent app memory
-        st.session_state.sorted_data = working_df
-        st.success("Sorting finished! Download links compiled.")
-
-    # 2. RUN RENDER BLOCK FROM PERSISTENT MEMORY
-    if st.session_state.sorted_data is not None:
-        st.write("---")
-        st.write("### 📥 Download Clean Provider Files (Name & Email Only)")
+        # Categories we want to build
+        buckets = [
+            "Microsoft_365", "Google_Workspace", "Mimecast_Gateway", 
+            "Proofpoint_Gateway", "Comcast_Business", "Private_or_Custom_Hosts", 
+            "Invalid_or_Dead_Domains"
+        ]
         
-        saved_df = st.session_state.sorted_data
+        files_created = 0
         
-        sorting_buckets = {
-            "Microsoft 365": "microsoft_leads.csv",
-            "Google Workspace": "google_leads.csv",
-            "Mimecast Gateway": "mimecast_high_security_leads.csv",
-            "Proofpoint Gateway": "proofpoint_high_security_leads.csv",
-            "Comcast Business": "comcast_leads.csv",
-            "Private / Custom Host": "private_hosted_leads.csv",
-            "Invalid / Dead Domain": "invalid_or_dead_emails.csv"
-        }
-
-        # Loop through buckets and render persistent buttons
-        for bucket_name, filename in sorting_buckets.items():
-            bucket_df = saved_df[saved_df['Email_Ecosystem'] == bucket_name].copy()
-            bucket_df = bucket_df[['Name', 'Email']]  # Strip everything except Name and Email
-            
-            if not bucket_df.empty:
-                csv_buffer = io.BytesIO()
-                bucket_df.to_csv(csv_buffer, index=False, encoding='utf-8')
-                csv_buffer.seek(0)
+        # Open zip framework
+        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+            for bucket_name in buckets:
+                # Filter down row data
+                bucket_df = working_df[working_df['Email_Ecosystem'] == bucket_name].copy()
+                # Isolate target constraints strictly to Name and Email
+                bucket_df = bucket_df[['Name', 'Email']]
                 
-                # These buttons will now remain visible on the screen during user interactions
-                st.download_button(
-                    label=f"📥 Download {bucket_name} List ({len(bucket_df)} leads)",
-                    data=csv_buffer,
-                    file_name=filename,
-                    mime="text/csv",
-                    key=f"btn_{filename}"
-                )
+                # If rows match this provider, write it into the zip file
+                if not bucket_df.empty:
+                    csv_text = bucket_df.to_csv(index=False, encoding='utf-8')
+                    zip_file.writestr(f"{bucket_name}_leads.csv", csv_text)
+                    files_created += 1
+        
+        zip_buffer.seek(0)
+        
+        if files_created > 0:
+            st.success(f"Sorting finished! Generated {files_created} separate CSV spreadsheets.")
+            
+            # 2. SINGLE STABLE DOWNLOAD PRIMITIVE
+            st.download_button(
+                label="📥 Download Sorted ZIP Package",
+                data=zip_buffer,
+                file_name="sorted_leads_package.zip",
+                mime="application/zip"
+            )
+        else:
+            st.error("No valid entries processed.")
